@@ -1,0 +1,10 @@
+Then use this PowerShell command to activate it:
+    .\.venv\Scripts\Activate.ps1
+
+cd backend
+uvicorn backend.main:app --reload --port 8000
+
+Invoke-RestMethod -Uri http://localhost:8000/book_ticket `
+  -Method POST `
+  -Headers @{ "Content-Type" = "application/json" } `
+  -Body '{ "traveler_name": "Shivanshu", "from_city": "Delhi", "to_city": "Bangalore", "date": "2025-07-15" }'

@@ -1,0 +1,10 @@
+{
+  "skip_steps": [],
+  "force_steps": [],
+  "tool_substitutions": {},
+  "discounts": {
+    "enabled": false,
+    "percentage": 0,
+    "expires_at": ""
+  }
+}
