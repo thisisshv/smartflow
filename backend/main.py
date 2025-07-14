@@ -1,5 +1,9 @@
 from fastapi import FastAPI, Query
-from backend.services.mistral_client import query_mistral
+from fastapi.responses import JSONResponse
+from fastapi.requests import Request
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from backend.services.cohere_client import cohere_to_structured_json
 from backend.services.workflow_manager import execute_workflow
 from backend.utils.models import IntentResponse
 from backend.utils.business_rules import load_rules, update_rules
@@ -12,6 +16,7 @@ from backend.apis import (
     business_rules_api
 )
 import json
+import re
 
 app = FastAPI()
 
@@ -21,21 +26,11 @@ def root():
 
 @app.post("/execute")
 async def run_command(command: str = Query(..., description="English command")):
-    mistral_response_raw = query_mistral(command)
-
-    print("\n--- MISTRAL RAW RESPONSE ---")
-    print(mistral_response_raw)
-
-    # Try to parse model output as JSON
-    try:
-        json_start = mistral_response_raw.find("{")
-        parsed = json.loads(mistral_response_raw[json_start:])
-    except Exception as e:
-        return {
-            "error": "Failed to parse LLM response",
-            "details": str(e),
-            "raw_response": mistral_response_raw
-        }
+    # Use Cohere to extract intent and structure it into JSON
+    structured = cohere_to_structured_json(command)
+    print("\n--- STRUCTURED INTENT ---")
+    print(structured)
+    parsed = structured
 
     # If it's a rules update (rule keys present)
     if any(k in parsed for k in ["skip_steps", "force_steps", "tool_substitutions", "discount"]):
@@ -44,18 +39,17 @@ async def run_command(command: str = Query(..., description="English command")):
             return {
                 "status": "rules updated",
                 "new_rules": load_rules(),
-                "raw_response": mistral_response_raw
+                "raw_response": parsed
             }
         except Exception as e:
             return {
                 "error": "Failed to update rules",
                 "details": str(e),
-                "raw_response": mistral_response_raw
+                "raw_response": parsed
             }
 
     # Otherwise, treat it as workflow intent
     try:
-        # Convert to IntentResponse model
         if "tools" in parsed:
             parsed["actions"] = [
                 {"tool": tool["name"], "params": tool["parameters"]}
@@ -65,14 +59,13 @@ async def run_command(command: str = Query(..., description="English command")):
 
         intent_data = IntentResponse(**parsed)
         result = await execute_workflow(intent_data)
-        result["raw_response"] = mistral_response_raw
+        result["raw_response"] = parsed
         return result
-
     except Exception as e:
         return {
             "error": "Failed to execute workflow",
             "details": str(e),
-            "raw_response": mistral_response_raw
+            "raw_response": parsed
         }
 
 @app.post("/update-rules")
@@ -82,6 +75,27 @@ async def update_business_rules(payload: dict):
         return load_rules()
     except Exception as e:
         return {"error": str(e)}
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error", "details": str(exc)},
+    )
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": exc.detail},
+    )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={"error": "Validation error", "details": exc.errors()},
+    )
 
 # ✅ Register all tool routers
 routers = [
